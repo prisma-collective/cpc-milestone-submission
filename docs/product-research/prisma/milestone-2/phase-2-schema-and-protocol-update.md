@@ -48,46 +48,82 @@ flowchart TD
 | Architectural Control | Technical Mechanism  | Governance & Privacy Function During Phase 3 Fieldwork (`Weeks 7-12`) |
 | :--- | :--- | :--- |
 | **1. Standard Repository Synchronization** | Regional hub Personal Data Servers (`PDS`) synchronize signed records through a standard AT Protocol relay and indexing pipeline into a unified research aggregation service (`AppView`). | Ensures that every record mutation is cryptographically verified against the regional hub or field team's Decentralized Identifier (`DID`) signing key prior to indexing . |
-| **2. Research Lexicon Schemas (`events.prisma.*`)** | Structured JSON Lexicon schemas (`events.prisma.hub.profile`, `events.prisma.hub.deployment`, `events.prisma.hub.team`, `events.prisma.hub.interview`) paired with the full `ingest.json` v2.0 evidence record (`events.prisma.evidence.interview`). | Enforces automated schema validation at ingestion time while supporting additive field evolution across Phases 2 through 5 . |
-| **3. Dual Identity Binding (`did:plc` / `did:web` + `did:cardano`)** | Self-certifying `did:cardano:stake1...` identifiers verified via Bech32 stake-address parsing, `Ed25519` public-key extraction from `CIP-0030` / `CIP-0008` `COSE_Sign1` signatures, and `Blake2b-224` key-hash matching . | Binds each regional hub (**Buenos Aires**, **Lagos**, **Nairobi**) and independent reviewer to both a repository `DID` and a verifiable Cardano stake keypair. |
-| **4. Resilient Field Connectivity** | Regional hub servers operate over standard HTTPS (`port 443`) tunnels with per-`DID` event serialization and repository-status health checks. | Enables field researchers in Lagos, Nairobi, and Buenos Aires to operate sovereign hub nodes reliably across variable local network conditions . |
-| **5. Confidential Local Vault & Consent Filtering** | Private blob storage encrypted at rest using `AES-256-GCM` authenticated encryption (`12-byte` nonce and `256-bit` key) paired with three-tier access headers (`private`, `team`, `public`). | **Raw interview audio, unredacted transcripts, personal names, and private contact details never leave the encrypted local vault.** Only consent-approved, anonymised structured records and the `SHA-256` `recordingHash` are published after independent reviewer sign-off. |
-| **6. Deterministic Retraction & Right-to-Erasure Compliance** | Idempotent record indexing keyed by `(uri, cid, rev)` with tombstone propagation when a record is amended or withdrawn. | Guarantees compliance with statutory data-suppression and erasure rights under `Nigeria NDPA 2023`, `Kenya DPA 2019`, `Argentina Law 25.326`, and `EU GDPR` . |
+| **2. Research Lexicon Schemas (`events.prisma.*`)** | Structured JSON Lexicon schemas (`events.prisma.hub.profile`, `events.prisma.hub.deployment`, `events.prisma.hub.team`, and `events.prisma.evidence.interview`, keyed by the recording's `sha256` fingerprint with `text`, `consentScope`, `topic`, `media`, `recordedAt`, `authorDid`, and `createdAt`) paired with the structured analytical template (`ingest.json` v2.0). | Enforces automated schema validation at repository publishing time while keeping raw media and non-public drafts inside the encrypted vault. |
+| **3. Dual Identity Binding (`did:plc` / `did:web` + `did:cardano`)** | Self-certifying `did:cardano:stake1...` identifiers verified via Bech32 stake-address parsing, `Ed25519` public-key extraction from `CIP-0030` / `CIP-0008` `COSE_Sign1` signatures, and `Blake2b-224` key-hash matching. | Binds each regional hub (**Buenos Aires**, **Lagos**, **Nairobi**) and independent reviewer to both a repository `DID` and a verifiable Cardano stake keypair. |
+| **4. Resilient Field Connectivity** | Regional hub servers operate over standard HTTPS (`port 443`) tunnels with per-`DID` event serialization and repository-status health checks. | Enables field researchers in Lagos, Nairobi, and Buenos Aires to operate sovereign hub nodes reliably across variable local network conditions. |
+| **5. Confidential Local Vault & Four-Choice Consent Filtering** | Private per-team blob storage encrypted at rest (`HKDF-SHA256` per-repo keys) with local Whisper transcription, regex and local-model identifier flagging, and four structured consent choices (`1. Private` [safe default, vault only], `2. Research` [anonymous, CPC and authorised researchers only, vault only], `3. Anonymous public` [redacted quotes and findings, published to repo with `consentScope: "anonymous"`], and `4. Public, named` [participant-approved named statements, published to repo with `consentScope: "public"`]), plus a separate `AI training` consent dial (`No` by default). | **Raw interview audio, video, unredacted transcripts, personal names, and private contact details never leave the encrypted local vault.** Every uploaded interview remains strictly `Private` inside the vault until human redaction review is completed; `Private` and `Research` records are never written to an AT Protocol repository. |
+| **6. Deterministic Retraction, Backup Purge & Deferred Batch Anchoring** | Every participant receives a withdrawal reference code (`e.g. WA-LOS-REG-02`) before recording begins. Withdrawal removes records from the hub vault, purges `at-pds` CAR backups, and propagates repository tombstones (`uri, cid, rev`), with a mandatory 12-month deletion ceiling on all raw media. `CIP-0020` Cardano batch anchoring (`label 199675`) runs asynchronously at post-review milestone checkpoints after records clear vault review, rather than blocking day-one vault intake. | Guarantees compliance with statutory data-suppression and erasure rights under `Nigeria NDPA 2023`, `Kenya DPA 2019`, `Argentina Law 25.326`, and `EU GDPR`. |
 
 ---
 
-## 3. Phase 2-3 Interview Ingestion Schema (`ingest.json` v2.0)
+## 3. Repository Publication Record (`events.prisma.evidence.interview`) and Analytical Coding Schema (`ingest.json` v2.0)
 
-The JSON schema below is the Phase 2-3 superset of the Milestone 1 [Ingest](../milestone-1/research-design-document/interview-guide/ingest.md) specification. It retains all five Milestone 1 top-level blocks (`conduct`, `participant`, `metadata`, `business_value`, `evidence`) for full backward compatibility while adding the structured traceability blocks for provenance, decision gates, counterparty progression, regulatory findings, infrastructure readiness, adoption signals, and cross-portfolio handoffs.
+In accordance with the vault-first privacy architecture, data capture separates the **minimal public repository record** (`events.prisma.evidence.interview`, published to the team's `at-pds` repository *only* when the participant selects **Choice 3: `Anonymous public`** or **Choice 4: `Public, named`** and a hub lead approves the redacted text on `/review`) from the **structured analytical coding template** (`ingest.json` v2.0, which structures the approved `text` summary and the vault-side research synthesis across all eight Decision Gates).
+
+### 3.1 Wire-Level AT Protocol Lexicon Record (`events.prisma.evidence.interview`)
+
+When a reviewed interview is approved for repository publication (`consentScope: "anonymous"` or `"public"`), the vault writes an `events.prisma.evidence.interview` record using the reviewer's authenticated `at-pds` session, keyed by the vault recording's `sha256` fingerprint:
+
+```json
+{
+  "$type": "events.prisma.evidence.interview",
+  "text": "[Approved redacted interview summary and structured Decision-Gate findings - up to 30,000 chars / 10,000 graphemes]",
+  "consentScope": "anonymous | public",
+  "topic": "interview",
+  "media": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mimeType": "audio/ogg",
+    "kind": "voice"
+  },
+  "recordedAt": "2026-11-24T10:00:00Z",
+  "authorDid": "did:cardano:stake1u8examplereviewerstakekeyhash...",
+  "createdAt": "2026-11-25T16:30:00Z"
+}
+```
+
+> **Vault-Only Boundary for `Private` and `Research` Records:** Interviews where the respondent selects **Choice 1 (`Private`)** or **Choice 2 (`Research` - readable only by the CPC and authorised project researchers)** remain encrypted inside the hub's local vault (`apps/vault`) and are never written as `events.prisma.evidence.interview` records to the public AT Protocol repository.
+
+### 3.2 Structured Analytical Coding Schema (`ingest.json` v2.0)
+
+The JSON schema below is the Phase 2-3 analytical superset of the Milestone 1 [Ingest](../milestone-1/research-design-document/interview-guide/ingest.md) specification. It retains all five Milestone 1 top-level blocks (`conduct`, `participant`, `metadata`, `business_value`, `evidence`) for full backward compatibility while aligning consent fields with the four-choice vault model (`private`, `research`, `anonymous`, `public`) and `events.prisma.evidence.interview`:
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PRISMA Phase 2-3 Interview Ingest and Decision-Gate Traceability Schema (v2.0)",
   "lexicon_nsid": "events.prisma.evidence.interview",
-  "hub_summary_lexicon": "events.prisma.hub.interview",
+  "hub_profile_lexicon": "events.prisma.hub.profile",
+  "hub_team_lexicon": "events.prisma.hub.team",
   "schema_version": "2.0.0",
   "provenance": {
     "record_strongRef": {
-      "uri": "at://did:plc:examplehubpds/events.prisma.hub.interview/3lb7xk2m9c22p",
+      "uri": "at://did:plc:exampleteamdid/events.prisma.evidence.interview/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "cid": "bafyreig7x4z2m9c22p5q8w3v6n4r8k2j5h7g9f1d3s5a7q9w2e4r6t8y0u"
     },
     "hub_did_plc": "did:plc:examplehubpds",
     "hub_did_cardano": "did:cardano:stake1u9examplecardanostakekeyhash...",
     "team_did_plc": "did:plc:exampleteamdid",
-    "reviewer_did_cardano": "did:cardano:stake1u8examplereviewerstakekeyhash...",
-    "recordingHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "verification_status": "pending_review | verified_co_signed | disputed | retracted",
-    "verified_at": "2026-11-25T16:30:00Z"
+    "authorDid": "did:cardano:stake1u8examplereviewerstakekeyhash...",
+    "media": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mimeType": "audio/ogg",
+      "kind": "voice | video | file | text"
+    },
+    "verification_status": "vault_private | pending_review | verified_published | disputed | withdrawn",
+    "recordedAt": "2026-11-24T10:00:00Z",
+    "createdAt": "2026-11-25T16:30:00Z"
   },
   "conduct": {
+    "withdrawal_reference_code": "WA-LOS-PAY-01",
     "play_id": "H1 | H2 | H3 | H4 | H5 | H6 | H7 | H8 | H9 | H10 | H11 | H12 | H13 | H14 | H15",
     "use_case": "Remittances | Identity_Credentials | Land_Records | Ag_Supply_Chain | Stablecoin_Settlement | Public_Procurement_Audit",
     "question_pack": "public-sector | regulators-policy | humanitarian-ngo | delivery-partners | payment-infrastructure | agricultural-networks | cardano-ecosystem",
     "screener_passed": true,
-    "consent_tier": "public_attributed | cpc_anonymised | confidential_vault_only",
-    "recording_mode": "recorded_vault_encrypted | notes_only | anonymous",
-    "consent": true,
+    "consent_choice": "private | research | anonymous_public | public_named",
+    "consentScope": "anonymous | public",
+    "ai_training_consent": false,
+    "recording_mode": "recorded_vault_encrypted | notes_only | text_intake",
+    "consent_recorded_before_start": true,
     "anonymous": true,
     "re_contact": false,
     "lead_interviewer_role_separated_from_introducer": true
@@ -220,7 +256,7 @@ To ensure that every interview conducted in the **Buenos Aires Hub**, **Lagos Hu
 | :-: | :--- | :--- | :--- |
 | **1** | **Pre-Call `Assemble` & Screener Check** | Prior to each interview, the lead interviewer populates the six-row `Assemble` header (`Cluster`, `Use case`, `Play one-liner`, `Hypothesis status`, `Desk claims to test`, `What would falsify this play`) from the [Use-Case Viability Register](./desk-research-and-use-case-scan.md) and confirms that the participant satisfies the Question Pack Screener (`screener_passed: true`). | Recorded in `conduct.play_id`, `conduct.question_pack`, and `conduct.screener_passed`. |
 | **2** | **Role Segregation & Blockchain-Agnostic Discovery** | Where a participant was introduced through a regional hub, `Wada`, or `CATS26` contact (`PRISMA-HUB`, `CATS26-WARM`, `WADA-NET`, `CARDANO-ECO`), the person who made the introduction does not serve as sole lead interviewer or final verifier (`lead_interviewer_role_separated_from_introducer: true`). The first `60%` of the session focuses on blockchain-agnostic operational problem and incumbent-system discovery. | Verified through distinct `metadata.interviewer` and `metadata.independent_reviewer` identifiers and `provenance.reviewer_did_cardano`. |
-| **3** | **Informed Consent & Encrypted Vault Upload (`Within 48h`)** | Verbal or written consent is recorded at the start of the session (`conduct.consent: true`). Raw audio and unredacted transcripts are uploaded exclusively to the hub's encrypted local vault (`AES-256-GCM`), which returns the `SHA-256` `recordingHash`. | The local vault blocks unauthenticated external reads; raw files are never published to the public repository . |
-| **4** | **Personal-Data Redaction & `ingest.json` v2.0 Coding (`Within 48h`)** | The interviewer removes personal names, phone numbers, email addresses, and confidential commercial identifiers (unless `consent_tier == "public_attributed"`) and completes all mandatory `ingest.json` v2.0 blocks, including `business_value.incumbent_baseline_named` and `evidence.counterevidence_or_limitation`. | Validated against the `ingest.json` v2.0 JSON schema prior to peer review. |
-| **5** | **Independent Hub Peer-Review & Wallet Co-Signature (`Within 72h`)** | An independent Hub Reviewer (distinct from the interviewer) compares the encrypted vault transcript against the anonymised `ingest.json` v2.0 record to confirm that: (a) all personal data is redacted; (b) courtesy statements are not miscoded as `CASS Tier 1` or `Tier 2`; and (c) counterevidence is accurately captured. Upon approval, the reviewer co-signs the record via `CIP-0030` (`did:cardano:stake1...`). | Cryptographic signature verification writes the approved record to the hub repository and generates the immutable `strongRef` (`at:// URI + CID`). |
+| **3** | **Informed Consent & Encrypted Vault Upload (`Within 48h`)** | Consent is confirmed and logged before recording begins (`conduct.consent_recorded_before_start: true`), and the participant receives a withdrawal reference code. Raw audio and unredacted transcripts are uploaded exclusively to the hub's encrypted local vault (`apps/vault`, `Private` by default), which computes the `SHA-256` `media.sha256` fingerprint. | The local vault blocks unauthenticated external reads; raw files and `Private` or `Research` interviews are never published to the public repository. |
+| **4** | **Personal-Data Redaction & Structured Coding (`Within 48h`)** | Local Whisper transcribes the recording and local rules and model flag personal names, third-party names, phone numbers, emails, and indirect identifiers. The interviewer and reviewer remove all flagged identifiers (unless the participant chose `Public, named` / `consentScope == "public"`) and complete the structured Decision-Gate blocks, including `business_value.incumbent_baseline_named` and `evidence.counterevidence_or_limitation`. | The vault review screen (`/review`) refuses an `anonymous` approval while any detected phone number, email, link, or unredacted identifier remains visible. |
+| **5** | **Independent Hub Peer-Review & Repository Publication (`Within 72h`)** | A Hub Lead or designated reviewer compares the encrypted vault draft against the redacted summary to confirm that: (a) all personal data and third-party names are redacted; (b) courtesy statements are not miscoded as `CASS Tier 1` or `Tier 2`; and (c) counterevidence is accurately captured. For `Anonymous public` (`consentScope: "anonymous"`) and `Public, named` (`consentScope: "public"`) records, the reviewer signs in with their `at-pds` wallet session (`authorDid: did:cardano:stake1...`) to write `events.prisma.evidence.interview`. | Cryptographic signature verification writes the approved record to the team repository, keyed by `media.sha256`, and generates the immutable `strongRef` (`at:// URI + CID`). `CIP-0020` Cardano batch anchoring follows asynchronously at post-review batch checkpoints. |
 | **6** | **Aggregation Indexing & Weekly Calibration Audit** | The indexing service verifies the repository signature and aggregates the record into the cross-hub research view. During weekly calibration reviews in Weeks 7-12, the Principal Investigator and Project Director audit sample records across all hubs to maintain inter-rater consistency on RARF and CASS ratings. | Idempotent `(uri, cid, rev)` indexing tracks regional quota completion and category balance in real time . |
